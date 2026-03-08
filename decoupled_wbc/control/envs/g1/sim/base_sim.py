@@ -119,6 +119,7 @@ class DefaultEnv:
                 mujoco.mj_forward(self.mj_model, self.mj_data)
                 self.viewer = None
         else:
+            self.elastic_band = None
             if self.onscreen:
                 self.viewer = mujoco.viewer.launch_passive(
                     self.mj_model, self.mj_data, show_left_ui=False, show_right_ui=False
@@ -160,6 +161,16 @@ class DefaultEnv:
         self.left_hand_index = np.array(self.left_hand_index)
         self.right_hand_index = np.array(self.right_hand_index)
 
+        # Set initial joint positions to DEFAULT_MOTOR_ANGLES for stable standing
+        default_angles = self.config.get("DEFAULT_MOTOR_ANGLES", None)
+        if default_angles is not None:
+            for i, jidx in enumerate(self.body_joint_index):
+                if i < len(default_angles):
+                    self.mj_data.qpos[jidx + 7 - 1] = default_angles[i]  # +7-1 for freejoint offset
+            # Update kinematics after setting initial positions
+            mujoco.mj_forward(self.mj_model, self.mj_data)
+            print(f"[base_sim] Set initial joint positions to DEFAULT_MOTOR_ANGLES ({len(default_angles)} joints)")
+
     def init_renderers(self):
         # Initialize camera renderers
         self.renderers = {}
@@ -172,33 +183,48 @@ class DefaultEnv:
     def compute_body_torques(self) -> np.ndarray:
         """Compute body torques based on the current robot state"""
         body_torques = np.zeros(self.num_body_dof)
-        if self.unitree_bridge is not None and self.unitree_bridge.low_cmd:
-            for i in range(self.unitree_bridge.num_body_motor):
-                if self.unitree_bridge.use_sensor:
-                    body_torques[i] = (
-                        self.unitree_bridge.low_cmd.motor_cmd[i].tau
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kp
-                        * (self.unitree_bridge.low_cmd.motor_cmd[i].q - self.mj_data.sensordata[i])
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kd
-                        * (
-                            self.unitree_bridge.low_cmd.motor_cmd[i].dq
-                            - self.mj_data.sensordata[i + self.unitree_bridge.num_body_motor]
+        if self.unitree_bridge is not None:
+            if self.unitree_bridge.low_cmd_received:
+                # Use received DDS command
+                for i in range(self.unitree_bridge.num_body_motor):
+                    if self.unitree_bridge.use_sensor:
+                        body_torques[i] = (
+                            self.unitree_bridge.low_cmd.motor_cmd[i].tau
+                            + self.unitree_bridge.low_cmd.motor_cmd[i].kp
+                            * (self.unitree_bridge.low_cmd.motor_cmd[i].q - self.mj_data.sensordata[i])
+                            + self.unitree_bridge.low_cmd.motor_cmd[i].kd
+                            * (
+                                self.unitree_bridge.low_cmd.motor_cmd[i].dq
+                                - self.mj_data.sensordata[i + self.unitree_bridge.num_body_motor]
+                            )
                         )
-                    )
-                else:
-                    body_torques[i] = (
-                        self.unitree_bridge.low_cmd.motor_cmd[i].tau
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kp
-                        * (
-                            self.unitree_bridge.low_cmd.motor_cmd[i].q
-                            - self.mj_data.qpos[self.body_joint_index[i] + 7 - 1]
+                    else:
+                        body_torques[i] = (
+                            self.unitree_bridge.low_cmd.motor_cmd[i].tau
+                            + self.unitree_bridge.low_cmd.motor_cmd[i].kp
+                            * (
+                                self.unitree_bridge.low_cmd.motor_cmd[i].q
+                                - self.mj_data.qpos[self.body_joint_index[i] + 7 - 1]
+                            )
+                            + self.unitree_bridge.low_cmd.motor_cmd[i].kd
+                            * (
+                                self.unitree_bridge.low_cmd.motor_cmd[i].dq
+                                - self.mj_data.qvel[self.body_joint_index[i] + 6 - 1]
+                            )
                         )
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kd
-                        * (
-                            self.unitree_bridge.low_cmd.motor_cmd[i].dq
-                            - self.mj_data.qvel[self.body_joint_index[i] + 6 - 1]
+            else:
+                # No command received yet - hold default pose with PD control
+                default_angles = self.config.get("DEFAULT_MOTOR_ANGLES", None)
+                motor_kp = self.config.get("MOTOR_KP", None)
+                motor_kd = self.config.get("MOTOR_KD", None)
+                if default_angles and motor_kp and motor_kd:
+                    for i in range(self.unitree_bridge.num_body_motor):
+                        q_actual = self.mj_data.qpos[self.body_joint_index[i] + 7 - 1]
+                        dq_actual = self.mj_data.qvel[self.body_joint_index[i] + 6 - 1]
+                        body_torques[i] = (
+                            motor_kp[i] * (default_angles[i] - q_actual)
+                            + motor_kd[i] * (0.0 - dq_actual)
                         )
-                    )
         return body_torques
 
     def compute_hand_torques(self) -> np.ndarray:
@@ -531,7 +557,53 @@ class BoxEnv(DefaultEnv):
         # Override the robot scene
         config = config.copy()  # Create a copy to avoid modifying the original
         config["ROBOT_SCENE"] = "decoupled_wbc/control/robot_model/model_data/g1/lift_box_43dof.xml"
-        super().__init__(config, "box", {}, onscreen, offscreen, enable_image_publish)
+        camera_configs = {
+            "egoview": {
+                "height": 256,  # [px] VLA input size
+                "width": 256,   # [px] VLA input size
+            },
+        }
+        super().__init__(config, "box", camera_configs, onscreen, offscreen, enable_image_publish)
+
+        # Weld constraint for grasp simulation
+        self._weld_id: int = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_EQUALITY, "grasp_weld"
+        )
+        self._box_body_id: int = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "box_body"
+        )
+        self._hand_body_id: int = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "left_wrist_yaw_link"
+        )
+        self._box_jnt_id: int = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, "box_joint"
+        )
+        print(f"[BoxEnv] weld_id={self._weld_id}, box_body={self._box_body_id}, "
+              f"hand_body={self._hand_body_id}, box_jnt={self._box_jnt_id}")
+
+    def activate_grasp(self) -> None:
+        """箱を左手前方にテレポートし、weld constraint を ON にする。"""
+        hand_pos = self.mj_data.xpos[self._hand_body_id].copy()  # [m]
+        hand_mat = self.mj_data.xmat[self._hand_body_id].reshape(3, 3)
+        offset = hand_mat @ np.array([0.08, 0.0, 0.0])  # [m] 手の前方 8cm
+        box_target = hand_pos + offset
+
+        # 箱をテレポート (free joint: qpos は qpos_adr から 7 要素)
+        qadr = self.mj_model.jnt_qposadr[self._box_jnt_id]
+        self.mj_data.qpos[qadr:qadr + 3] = box_target  # [m]
+        self.mj_data.qpos[qadr + 3:qadr + 7] = [1.0, 0.0, 0.0, 0.0]  # identity quat
+        dadr = self.mj_model.jnt_dofadr[self._box_jnt_id]
+        self.mj_data.qvel[dadr:dadr + 6] = 0.0
+
+        self.mj_data.eq_active[self._weld_id] = 1
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+        print(f"[BoxEnv] Grasp ON | hand={hand_pos} box→{box_target}")
+
+    def release_grasp(self) -> None:
+        """Weld constraint を OFF にして箱を解放する。"""
+        self.mj_data.eq_active[self._weld_id] = 0
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+        print("[BoxEnv] Grasp OFF")
 
     def reward(self):
         """Calculate reward based on gripper contact with cube and cube height"""

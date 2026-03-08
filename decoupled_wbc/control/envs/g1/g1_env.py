@@ -98,6 +98,9 @@ class G1Env(HumanoidEnv):
         for _ in range(sim_num_steps):
             self.sim.sim_env.sim_step()
         self.sim.sim_env.update_viewer()
+        # Update offscreen render caches for image publishing (VLA inference)
+        if self.sim.sim_env.offscreen:
+            self.sim.sim_env.update_render_caches()
 
     def body(self) -> G1Body:
         return self._body

@@ -66,6 +66,11 @@ def main(config: ControlLoopConfig):
     if env.sim and not config.sim_sync_mode:
         env.start_simulator()
 
+    # Start image publishing subprocess for VLA inference
+    if env.sim and config.enable_offscreen:
+        env.sim.start_image_publish_subprocess()
+        print("Image publishing subprocess started (ZMQ port 5555)")
+
     wbc_policy = get_wbc_policy("g1", robot_model, wbc_config, config.upper_body_joint_speed)
 
     keyboard_listener_pub = KeyboardListenerPublisher()
@@ -115,6 +120,19 @@ def main(config: ControlLoopConfig):
                         last_teleop_cmd = upper_body_cmd.copy()
                         if config.ik_indicator:
                             env.set_ik_indicator(upper_body_cmd)
+
+                    # Handle grasp_cmd (weld constraint ON/OFF) before sending to policy
+                    if wbc_goal and "grasp_cmd" in wbc_goal:
+                        grasp_on = wbc_goal.pop("grasp_cmd")
+                        if env.sim is not None:
+                            from decoupled_wbc.control.envs.g1.sim.base_sim import BoxEnv
+                            sim_env = env.sim.sim_env
+                            if isinstance(sim_env, BoxEnv):
+                                if grasp_on:
+                                    sim_env.activate_grasp()
+                                else:
+                                    sim_env.release_grasp()
+
                     # Send goal to policy
                     if wbc_goal:
                         wbc_goal["interpolation_garbage_collection_time"] = t_now - 2 * (
@@ -208,7 +226,7 @@ def main(config: ControlLoopConfig):
                 data_exp_pub.publish(msg)
                 end_time = time.monotonic()
 
-            if env.sim and (not env.sim.sim_thread or not env.sim.sim_thread.is_alive()):
+            if env.sim and not config.sim_sync_mode and (not env.sim.sim_thread or not env.sim.sim_thread.is_alive()):
                 raise RuntimeError("Simulator thread is not alive")
 
             rate.sleep()

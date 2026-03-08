@@ -22,6 +22,8 @@
     <material name="table" texture="table" texuniform="true" reflectance="0.1" />
     <texture type="2d" name="cube" builtin="flat" rgb1="0.3 0.7 0.8" width="512" height="512" />
     <material name="cube" texture="cube" texuniform="true" reflectance="0.1" />
+    <texture type="2d" name="table_b_tex" builtin="flat" rgb1="0.5 0.7 0.5" width="512" height="512" />
+    <material name="table_b" texture="table_b_tex" texuniform="true" reflectance="0.1" />
   </asset>
 
   <worldbody>
@@ -30,18 +32,35 @@
     <!-- Site -->
     <site name="com_marker" pos="0.1 0 0" size="0.05" rgba="1 0 0 1" type="sphere" />
 
-    <body name="table_body" pos="0.6 0 0.4">
-      <geom name="table_top" pos="0 0 0.3" size="0.5 1.0 0.05" type="box" material="table"/>
-      <geom name="table_leg1" pos="0.0 0.9 -0.05" size="0.5 0.05 0.4" type="box" material="table"/>
-      <geom name="table_leg2" pos="0.0 -0.9 -0.05" size="0.5 0.05 0.4" type="box" material="table"/>
+    <!-- Table A (source): robot left-front, brown -->
+    <body name="table_a_body" pos="0.6 0.5 0.35">
+      <geom name="table_a_top" pos="0 0 0.3" size="0.25 0.25 0.03" type="box" material="table"/>
+      <geom name="table_a_leg1" pos="0 0.2 -0.05" size="0.25 0.03 0.3" type="box" material="table"/>
+      <geom name="table_a_leg2" pos="0 -0.2 -0.05" size="0.25 0.03 0.3" type="box" material="table"/>
     </body>
-    <body name="box_body" pos="0.35 0 0.9">
+    <!-- Table B (destination): robot right-front, green -->
+    <body name="table_b_body" pos="0.6 -1.0 0.35">
+      <geom name="table_b_top" pos="0 0 0.3" size="0.25 0.25 0.03" type="box" material="table_b"/>
+      <geom name="table_b_leg1" pos="0 0.2 -0.05" size="0.25 0.03 0.3" type="box" material="table_b"/>
+      <geom name="table_b_leg2" pos="0 -0.2 -0.05" size="0.25 0.03 0.3" type="box" material="table_b"/>
+    </body>
+    <!-- Box on Table A (top surface at z=0.68, box half-size=0.1) -->
+    <body name="box_body" pos="0.6 0.5 0.78">
       <joint type="free" damping="0.0005" name="box_joint" />
       <geom name="box" size="0.1 0.1 0.1" type="box" material="cube" solimp="0.998 0.998 0.001"
         solref="0.001 2" density="100" friction="0.95 0.3 0.1" />
     </body>
 
+    <!-- Ego-view camera (head height, forward-facing) -->
+    <camera name="egoview" pos="0.078 0 1.308"
+            xyaxes="0.000 -1.000 0.000 0.767 0.001 0.641" fovy="90"/>
+
   </worldbody>
+
+  <equality>
+    <weld name="grasp_weld" body1="box_body" body2="left_wrist_yaw_link"
+          solimp="0.9 0.95 0.001" solref="0.001 2" active="false" />
+  </equality>
 
   <default>
     <geom friction="1.0" />

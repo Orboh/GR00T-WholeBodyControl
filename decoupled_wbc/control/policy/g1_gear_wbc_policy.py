@@ -41,7 +41,7 @@ class G1GearWbcPolicy(Policy):
         self.counter = 0
 
         # Initialize state variables
-        self.use_policy_action = False
+        self.use_policy_action = True  # Auto-activate for balance from start
         self.action = np.zeros(self.config["num_actions"], dtype=np.float32)
         self.target_dof_pos = self.config["default_angles"].copy()
         self.cmd = self.config["cmd_init"].copy()
@@ -149,9 +149,10 @@ class G1GearWbcPolicy(Policy):
         # Add current observation to history
         self.obs_history.append(single_obs)
 
-        # Fill history with zeros if not enough observations yet
+        # Fill history with first observation if not enough observations yet
+        # (using zeros causes unstable policy output on initial steps)
         while len(self.obs_history) < self.config["obs_history_len"]:
-            self.obs_history.appendleft(np.zeros_like(single_obs))
+            self.obs_history.appendleft(single_obs.copy())
 
         # Construct full observation with history
         single_obs_dim = len(single_obs)
@@ -233,7 +234,9 @@ class G1GearWbcPolicy(Policy):
         if self.use_policy_action:
             cmd_q = self.action * self.config["action_scale"] + self.config["default_angles"]
         else:
-            cmd_q = self.observation["q"][self.robot_model.get_joint_group_indices("lower_body")]
+            # Hold default standing pose actively (PD control has no gravity compensation,
+            # so mirroring current position leads to gravity-induced sag and fall)
+            cmd_q = np.array(self.config["default_angles"], dtype=np.float32)
 
         cmd_dq = np.zeros(self.config["num_actions"])
         cmd_tau = np.zeros(self.config["num_actions"])
