@@ -96,7 +96,10 @@ def main(config: ControlLoopConfig):
     teleop_subscriber = ROSMsgSubscriber(TELEOP_GOAL_TOPIC)
 
     # "orchestrator" or "teleop" — orchestrator の set_mode で切り替え
-    control_mode: str = "orchestrator"
+    # CONTROL_MODE 環境変数で初期モードを指定可能 (デフォルト: orchestrator)
+    import os as _os
+    control_mode: str = _os.environ.get("CONTROL_MODE", "orchestrator")
+    print(f"[control_mode] initial: {control_mode}")
     teleop_recv_count: int = 0
 
     last_teleop_cmd = None
