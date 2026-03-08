@@ -605,6 +605,21 @@ class BoxEnv(DefaultEnv):
         mujoco.mj_forward(self.mj_model, self.mj_data)
         print("[BoxEnv] Grasp OFF")
 
+    def reset(self) -> None:
+        """環境を初期状態にリセットする（箱位置・ロボット位置・weld constraint）。"""
+        # weld constraint を OFF
+        self.mj_data.eq_active[self._weld_id] = 0
+        # MuJoCo の全状態を XML 初期値にリセット
+        mujoco.mj_resetData(self.mj_model, self.mj_data)
+        # 初期関節角を再設定
+        default_angles = self.config.get("DEFAULT_MOTOR_ANGLES", None)
+        if default_angles is not None:
+            for i, jidx in enumerate(self.body_joint_index):
+                if i < len(default_angles):
+                    self.mj_data.qpos[jidx + 7 - 1] = default_angles[i]
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+        print("[BoxEnv] Environment reset complete")
+
     def reward(self):
         """Calculate reward based on gripper contact with cube and cube height"""
         left_hand_body = [

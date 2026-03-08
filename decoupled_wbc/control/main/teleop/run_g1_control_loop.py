@@ -183,8 +183,13 @@ def main(config: ControlLoopConfig):
 
                 if env.use_sim and wbc_goal.get("reset_env_and_policy", False):
                     print("Resetting sim environment and policy")
-                    # Reset teleop policy & sim env
-                    dispatcher.handle_key("k")
+
+                    # シミュレーション環境をリセット（箱・ロボット位置を初期状態に戻す）
+                    env.sim.sim_env.reset()
+
+                    # WBC ポリシーをリセット（reset メソッドがあれば呼ぶ）
+                    if hasattr(wbc_policy, "reset"):
+                        wbc_policy.reset()
 
                     # Clear upper body commands
                     upper_body_policy_subscriber._msg = None
