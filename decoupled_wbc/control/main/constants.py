@@ -7,6 +7,8 @@ LOCO_MANIP_TASK_STATUS_TOPIC = "LocoManipPolicy/task_status"
 LOCO_NAV_TASK_STATUS_TOPIC = "NavigationPolicy/task_status"
 LOWER_BODY_POLICY_STATUS_TOPIC = "ControlPolicy/lower_body_policy_status"
 JOINT_SAFETY_STATUS_TOPIC = "ControlPolicy/joint_safety_status"
+TELEOP_GOAL_TOPIC = "TeleopPolicy/upper_body_pose"
+TELEOP_DONE_TOPIC = "TeleopPolicy/done"
 
 
 DEFAULT_NAV_CMD = [0.0, 0.0, 0.0]

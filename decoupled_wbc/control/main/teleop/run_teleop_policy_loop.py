@@ -3,7 +3,7 @@ import time
 import rclpy
 import tyro
 
-from decoupled_wbc.control.main.constants import CONTROL_GOAL_TOPIC
+from decoupled_wbc.control.main.constants import TELEOP_DONE_TOPIC, TELEOP_GOAL_TOPIC
 from decoupled_wbc.control.main.teleop.configs.configs import TeleopConfig
 from decoupled_wbc.control.policy.lerobot_replay_policy import LerobotReplayPolicy
 from decoupled_wbc.control.policy.teleop_policy import TeleopPolicy
@@ -55,8 +55,9 @@ def main(config: TeleopConfig):
             replay_data_path=config.teleop_replay_path,
         )
 
-    # Create a publisher for the navigation commands
-    control_publisher = ROSMsgPublisher(CONTROL_GOAL_TOPIC)
+    # Create publishers: teleop goal (separated from orchestrator) + done signal
+    control_publisher = ROSMsgPublisher(TELEOP_GOAL_TOPIC)
+    done_publisher = ROSMsgPublisher(TELEOP_DONE_TOPIC)
 
     # Create rate controller
     rate = node.create_rate(config.teleop_frequency)
@@ -86,6 +87,11 @@ def main(config: TeleopConfig):
                 # Publish the teleop command
                 with telemetry.timer("publish_teleop_command"):
                     control_publisher.publish(data)
+
+                # A ボタン (toggle_data_collection) で完了通知を publish
+                if data.get("toggle_data_collection", False):
+                    done_publisher.publish({"done": True, "timestamp": t_now})
+                    print("Teleop done signal sent (A button pressed)")
 
                 # For the initial pose, wait the full duration before continuing
                 if iteration == 0:

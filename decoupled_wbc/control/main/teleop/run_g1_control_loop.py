@@ -13,6 +13,7 @@ from decoupled_wbc.control.main.constants import (
     LOWER_BODY_POLICY_STATUS_TOPIC,
     ROBOT_CONFIG_TOPIC,
     STATE_TOPIC_NAME,
+    TELEOP_GOAL_TOPIC,
 )
 from decoupled_wbc.control.main.teleop.configs.configs import ControlLoopConfig
 from decoupled_wbc.control.policy.wbc_policy_factory import get_wbc_policy
@@ -92,6 +93,11 @@ def main(config: ControlLoopConfig):
     rate = node.create_rate(config.control_frequency)
 
     upper_body_policy_subscriber = ROSMsgSubscriber(CONTROL_GOAL_TOPIC)
+    teleop_subscriber = ROSMsgSubscriber(TELEOP_GOAL_TOPIC)
+
+    # "orchestrator" or "teleop" — orchestrator の set_mode で切り替え
+    control_mode: str = "orchestrator"
+    teleop_recv_count: int = 0
 
     last_teleop_cmd = None
     try:
@@ -110,16 +116,51 @@ def main(config: ControlLoopConfig):
 
                 # Measure policy setup time
                 with telemetry.timer("policy_setup"):
-                    upper_body_cmd = upper_body_policy_subscriber.get_msg()
+                    orchestrator_cmd = upper_body_policy_subscriber.get_msg()
+                    teleop_cmd = teleop_subscriber.get_msg()
 
                     t_now = time.monotonic()
 
+                    # orchestrator の set_mode で制御モードを切り替え
+                    if orchestrator_cmd and "set_mode" in orchestrator_cmd:
+                        new_mode = orchestrator_cmd.pop("set_mode")
+                        if new_mode in ("orchestrator", "teleop"):
+                            if new_mode != control_mode:
+                                print(f"[control_mode] {control_mode} → {new_mode}")
+                            control_mode = new_mode
+
+                    # control_mode に応じて入力を選択
                     wbc_goal = {}
-                    if upper_body_cmd:
-                        wbc_goal = upper_body_cmd.copy()
-                        last_teleop_cmd = upper_body_cmd.copy()
-                        if config.ik_indicator:
-                            env.set_ik_indicator(upper_body_cmd)
+                    if control_mode == "teleop":
+                        # テレオペモード: teleop 入力を使う
+                        if teleop_cmd:
+                            wbc_goal = teleop_cmd.copy()
+                            last_teleop_cmd = teleop_cmd.copy()
+                            teleop_recv_count += 1
+                            # DEBUG: 50回に1回ログ出力
+                            if teleop_recv_count % 50 == 1:
+                                keys = list(teleop_cmd.keys())
+                                print(f"[teleop] recv #{teleop_recv_count}, keys={keys}")
+                        elif last_teleop_cmd:
+                            # 新しいテレオペ入力がなくても、最新のコマンドを継続送信
+                            # (WBC ポリシーの 1s safety timeout を回避するため)
+                            wbc_goal = last_teleop_cmd.copy()
+                            wbc_goal["target_time"] = t_now + (1 / config.control_frequency)
+                        # orchestrator の navigate_cmd だけは引き続き受け付ける（歩行は止めない）
+                        if orchestrator_cmd and "navigate_cmd" in orchestrator_cmd:
+                            wbc_goal["navigate_cmd"] = orchestrator_cmd["navigate_cmd"]
+                        # orchestrator の grasp_cmd も受け付ける (weld ON/OFF)
+                        if orchestrator_cmd and "grasp_cmd" in orchestrator_cmd:
+                            wbc_goal["grasp_cmd"] = orchestrator_cmd["grasp_cmd"]
+                    else:
+                        # orchestrator モード: orchestrator 入力を使う
+                        upper_body_cmd = orchestrator_cmd
+                        if upper_body_cmd:
+                            wbc_goal = upper_body_cmd.copy()
+                            last_teleop_cmd = upper_body_cmd.copy()
+
+                    if wbc_goal and config.ik_indicator:
+                        env.set_ik_indicator(wbc_goal)
 
                     # Handle grasp_cmd (weld constraint ON/OFF) before sending to policy
                     if wbc_goal and "grasp_cmd" in wbc_goal:
